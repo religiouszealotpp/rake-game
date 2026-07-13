@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RAKE LOT ESCAPE</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&amp;display=swap');
+        
+        body {
+            margin: 0;
+            padding: 6px 4px;
+            background: #0f0f1e;
+            color: #eee;
+            font-family: "Press Start 2P", system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        h1 {
+            font-size: 20px;
+            margin: 0 0 2px 0;
+            text-shadow: 2px 2px 0 #000;
+            color: #ffcc00;
+        }
+        
+        .subtitle {
+            font-size: 7px;
+            color: #888;
+            margin-bottom: 4px;
+        }
+        
+        #game-container {
+            position: relative;
+            border: 5px solid #333;
+            border-radius: 3px;
+            box-shadow: 0 0 0 2px #000, 0 6px 20px rgba(0,0,0,0.5);
+            margin: 0 auto;
+            background: #222;
+            overflow: hidden;
+        }
+        
+        canvas {
+            display: block;
+            background: #2a2a3a;
+            image-rendering: crisp-edges;
+            touch-action: none;
+        }
+        
+        #ui {
+            margin-top: 6px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        button {
+            font-family: "Press Start 2P", system-ui;
+            background: #ffcc00;
+            color: #1a1a2e;
+            border: none;
+            padding: 7px 11px;
+            font-size: 8px;
+            cursor: pointer;
+            border-radius: 2px;
+            box-shadow: 0 2px 0 #b38f00;
+        }
+        
+        button:active {
+            transform: translateY(1px);
+            box-shadow: 0 1px 0 #b38f00;
+        }
+        
+        .instructions {
+            background: #16213e;
+            border: 2px solid #444;
+            padding: 6px 8px;
+            max-width: 720px;
+            font-size: 7px;
+            line-height: 1.3;
+            margin-top: 5px;
+            text-align: center;
+        }
+        
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: white;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        
+        .overlay.show { display: flex; }
+    </style>
+</head>
+<body>
+    <h1>RAKE LOT ESCAPE</h1>
+    <div class="subtitle">Navigate the real parking lot maze • Avoid rakes • Find the exit</div>
+    
+    <div id="game-container">
+        <canvas id="game" width="780" height="560"></canvas>
+        
+        <div id="menu-overlay" class="overlay" style="background:rgba(0,0,0,0.92)">
+            <h2 style="color:#ffcc00; font-size:18px; margin:0 0 5px 0;">RAKE LOT ESCAPE</h2>
+            <p style="font-size:8px; max-width:290px; margin:0 0 8px 0; line-height:1.35;">
+                A real parking lot with lanes, spaces &amp; crossbars.<br>
+                Full movement control. Collect coins if you want.<br>
+                Rakes knock you back. Reach the EXIT without chaining 4 hits.
+            </p>
+            <button onclick="startGame()">ESCAPE THE LOT</button>
+        </div>
+        
+        <div id="gameover-overlay" class="overlay" style="background:rgba(70,0,0,0.88)">
+            <h2 style="color:#ff4444; font-size:17px; margin:0 0 4px 0;">KNOCKED OUT</h2>
+            <p id="final-stats" style="font-size:9px; margin:0 0 7px 0;"></p>
+            <button onclick="restartGame()">TRY AGAIN</button>
+        </div>
+        
+        <div id="win-overlay" class="overlay" style="background:rgba(0,60,30,0.9)">
+            <h2 style="color:#44ff88; font-size:18px; margin:0 0 4px 0;">YOU ESCAPED!</h2>
+            <p id="win-stats" style="font-size:9px; margin:0 0 8px 0;"></p>
+            <button onclick="restartGame()">RUN AGAIN</button>
+        </div>
+    </div>
+    
+    <div id="ui">
+        <button onclick="startGame()">NEW RUN</button>
+        <button onclick="restartGame()">RESTART</button>
+    </div>
+    
+    <div class="instructions">
+        Real parking lot layout with lanes and crossbars you can't cross. 
+        Navigate to the EXIT on the right side. Rakes will knock you around — don't chain 4.
+    </div>
+    
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d', { alpha: true });
+        
+        const W = canvas.width;
+        const H = canvas.height;
+        
+        const WORLD_W = 1700;
+        const WORLD_H = 1050;
+        
+        let player = { x: 140, y: WORLD_H / 2, vx: 0, vy: 0, radius: 10 };
+        let cameraX = 0;
+        let cameraY = 0;
+        
+        let rakes = [];
+        let parkedCars = [];
+        let coins = [];
+        let barriers = [];
+        let exitZone = { x: WORLD_W - 180, y: 200, w: 160, h: 650 };
+        
+        let keys = {};
+        let gameState = 'menu';
+        let consecutiveHits = 0;
+        let lastHitTime = 0;
+        let score = 0;
+        let screenShake = 0;
+        
+        let joystick = {
+            active: false,
+            baseX: 92,
+            baseY: H - 82,
+            baseRadius: 52,
+            knobX: 92,
+            knobY: H - 82,
+            knobRadius: 23,
+            maxDistance: 45,
+            touchId: null
+        };
+        let touchDirX = 0;
+        let touchDirY = 0;
+        
+        function resizeGame() {
+            const container = document.getElementById('game-container');
+            const margin = 5;
+            const maxW = Math.max(290, window.innerWidth - margin * 2);
+            const maxH = Math.max(190, window.innerHeight - 108);
+            const scale = Math.min(maxW / W, maxH / H);
+            const dw = Math.floor(W * scale);
+            const dh = Math.floor(H * scale);
+            canvas.style.width = dw + 'px';
+            canvas.style.height = dh + 'px';
+            container.style.width = dw + 'px';
+            container.style.height = dh + 'px';
+            container.style.margin = '0 auto';
+        }
+        
+        window.addEventListener('resize', resizeGame);
+        window.addEventListener('orientationchange', () => setTimeout(resizeGame, 90));
+        
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if ((e.key === ' ' || e.key === 'Spacebar') && (gameState === 'menu' || gameState === 'gameover' || gameState === 'win')) {
+                e.preventDefault();
+                if (gameState === 'menu' || gameState === 'win') startGame();
+                else restartGame();
+            }
+        });
+        window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+        
+        canvas.addEventListener('click', () => {
+            if (gameState === 'menu' || gameState === 'win') startGame();
+            if (gameState === 'gameover') restartGame();
+        });
+        
+        function getCanvasPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.touches ? e.touches[0].clientX : e.clientX;
+            const cy = e.touches ? e.touches[0].clientY : e.clientY;
+            return { x: (cx - rect.left) * (W / rect.width), y: (cy - rect.top) * (H / rect.height) };
+        }
+        
+        function handleTouchStart(e) {
+            e.preventDefault();
+            if (gameState !== 'playing') {
+                if (gameState === 'menu' || gameState === 'win') startGame();
+                if (gameState === 'gameover') restartGame();
+                return;
+            }
+            const pos = getCanvasPos(e);
+            const touch = e.touches[0];
+            const dx = pos.x - joystick.baseX;
+            const dy = pos.y - joystick.baseY;
+            if (Math.hypot(dx, dy) < joystick.baseRadius * 1.65) {
+                joystick.active = true;
+                joystick.touchId = touch.identifier;
+                const clamped = Math.min(Math.hypot(dx, dy), joystick.maxDistance);
+                const ang = Math.atan2(dy, dx);
+                joystick.knobX = joystick.baseX + Math.cos(ang) * clamped;
+                joystick.knobY = joystick.baseY + Math.sin(ang) * clamped;
+                touchDirX = (joystick.knobX - joystick.baseX) / joystick.maxDistance;
+                touchDirY = (joystick.knobY - joystick.baseY) / joystick.maxDistance;
+            }
+        }
+        
+        function handleTouchMove(e) {
+            e.preventDefault();
+            if (gameState !== 'playing' || !joystick.active) return;
+            let t = null;
+            for (let i = 0; i < e.touches.length; i++) {
+                if (e.touches[i].identifier === joystick.touchId) { t = e.touches[i]; break; }
+            }
+            if (!t) return;
+            const rect = canvas.getBoundingClientRect();
+            const px = (t.clientX - rect.left) * (W / rect.width);
+            const py = (t.clientY - rect.top) * (H / rect.height);
+            const dx = px - joystick.baseX;
+            const dy = py - joystick.baseY;
+            const dist = Math.hypot(dx, dy);
+            const clamped = Math.min(dist, joystick.maxDistance);
+            const ang = Math.atan2(dy, dx);
+            joystick.knobX = joystick.baseX + Math.cos(ang) * clamped;
+            joystick.knobY = joystick.baseY + Math.sin(ang) * clamped;
+            touchDirX = (joystick.knobX - joystick.baseX) / joystick.maxDistance;
+            touchDirY = (joystick.knobY - joystick.baseY) / joystick.maxDistance;
+        }
+        
+        function handleTouchEnd(e) {
+            e.preventDefault();
+            let stillActive = false;
+            for (let i = 0; i < e.touches.length; i++) {
+                if (e.touches[i].identifier === joystick.touchId) { stillActive = true; break; }
+            }
+            if (!stillActive && joystick.active) {
+                joystick.active = false;
+                joystick.touchId = null;
+                touchDirX = 0;
+                touchDirY = 0;
+                joystick.knobX = joystick.baseX;
+                joystick.knobY = joystick.baseY;
+            }
+        }
+        
+        canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+        canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+        canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+        
+        function dist(x1,y1,x2,y2){ return Math.hypot(x2-x1,y2-y1); }
+        
+        function createParkingLot() {
+            rakes = [];
+            parkedCars = [];
+            coins = [];
+            barriers = [];
+            
+            const rowCount = 5;
+            const rowSpacing = 165;
+            
+            for (let row = 0; row < rowCount; row++) {
+                const baseY = 95 + row * rowSpacing;
+                
+                for (let col = 0; col < 9; col++) {
+                    const bx = 95 + col * 78;
+                    if (Math.random() < 0.52) {
+                        parkedCars.push({
+                            x: bx + 29,
+                            y: baseY + 46,
+                            angle: (Math.random() - 0.5) * 0.22,
+                            color: ['#c0392b','#2980b9','#27ae60','#f39c12','#8e44ad'][Math.floor(Math.random()*5)]
+                        });
+                    }
+                    if (Math.random() < 0.32) {
+                        coins.push({
+                            x: bx + 22 + Math.random()*16,
+                            y: baseY + 28 + Math.random()*32,
+                            radius: 6,
+                            collected: false
+                        });
+                    }
+                }
+                
+                // Crossbars between rows
+                if (row > 0 && row < rowCount-1 && Math.random() < 0.65) {
+                    const barY = baseY - 36;
+                    barriers.push({ x: 88, y: barY, w: WORLD_W-176, h: 10 });
+                    const gapX = 240 + Math.random() * (WORLD_W - 520);
+                    barriers.push({ x: gapX, y: barY-1, w: 88, h: 12, isGap: true });
+                }
+            }
+            
+            // Vertical barriers creating maze-like paths
+            for (let i = 0; i < 3; i++) {
+                const vx = 260 + i * 420;
+                barriers.push({ x: vx, y: 75, w: 13, h: WORLD_H - 150 });
+                const gapY = 170 + Math.random() * (WORLD_H - 380);
+                barriers.push({ x: vx-1, y: gapY, w: 15, h: 65, isGap: true });
+            }
+            
+            // Rakes in lanes
+            for (let i = 0; i < 30; i++) {
+                let rx, ry, tries = 0;
+                do {
+                    rx = 65 + Math.random() * (WORLD_W - 130);
+                    ry = 55 + Math.random() * (WORLD_H - 110);
+                    tries++;
+                } while (tries < 22 && (
+                    rakes.some(r => dist(rx, ry, r.x, r.y) < 34) ||
+                    barriers.some(b => !b.isGap && rx > b.x && rx < b.x + b.w && ry > b.y && ry < b.y + b.h)
+                ));
+                rakes.push({
+                    x: rx, y: ry, radius: 14,
+                    angle: Math.random() * Math.PI * 2,
+                    hitFlash: 0
+                });
+            }
+            
+            // Extra coins in lanes
+            for (let i = 0; i < 20; i++) {
+                coins.push({
+                    x: 95 + Math.random() * (WORLD_W - 190),
+                    y: 65 + Math.random() * (WORLD_H - 130),
+                    radius: 6,
+                    collected: false
+                });
+            }
+            
+            // Clear exit area
+            rakes = rakes.filter(r => !(r.x > exitZone.x - 25 && r.x < exitZone.x + exitZone.w + 25 &&
+                                       r.y > exitZone.y && r.y < exitZone.y + exitZone.h));
+        }
+        
+        function updateCamera() {
+            const targetX = player.x - W * 0.42;
+            const targetY = player.y - H * 0.5;
+            cameraX += (targetX - cameraX) * 0.1;
+            cameraY += (targetY - cameraY) * 0.1;
+            cameraX = Math.max(0, Math.min(WORLD_W - W, cameraX));
+            cameraY = Math.max(0, Math.min(WORLD_H - H, cameraY));
+        }
+        
+        function update() {
+            if (gameState !== 'playing') return;
+            
+            let ax = 0, ay = 0;
+            if (joystick.active) {
+                ax = touchDirX;
+                ay = touchDirY;
+            } else {
+                if (keys['ArrowLeft'] || keys['a'] || keys['A']) ax -= 1;
+                if (keys['ArrowRight'] || keys['d'] || keys['D']) ax += 1;
+                if (keys['ArrowUp'] || keys['w'] || keys['W']) ay -= 1;
+                if (keys['ArrowDown'] || keys['s'] || keys['S']) ay += 1;
+            }
+            
+            if (ax !== 0 || ay !== 0) {
+                const len = Math.hypot(ax, ay);
+                player.vx += (ax / len) * 0.6;
+                player.vy += (ay / len) * 0.6;
+            }
+            
+            player.vx *= 0.86;
+            player.vy *= 0.86;
+            
+            const maxSpd = 7.0;
+            const cur = Math.hypot(player.vx, player.vy);
+            if (cur > maxSpd) {
+                player.vx = player.vx / cur * maxSpd;
+                player.vy = player.vy / cur * maxSpd;
+            }
+            
+            player.x += player.vx;
+            player.y += player.vy;
+            
+            player.x = Math.max(20, Math.min(WORLD_W - 20, player.x));
+            player.y = Math.max(20, Math.min(WORLD_H - 20, player.y));
+            
+            updateCamera();
+            
+            // Barrier collision
+            for (let b of barriers) {
+                if (b.isGap) continue;
+                const closestX = Math.max(b.x, Math.min(player.x, b.x + b.w));
+                const closestY = Math.max(b.y, Math.min(player.y, b.y + b.h));
+                const dx = player.x - closestX;
+                const dy = player.y - closestY;
+                const d = Math.hypot(dx, dy);
+                if (d < player.radius + 2 && d > 0) {
+                    const pushX = dx / d;
+                    const pushY = dy / d;
+                    player.x = closestX + pushX * (player.radius + 3.5);
+                    player.y = closestY + pushY * (player.radius + 3.5);
+                    player.vx = pushX * 2.6 + player.vx * 0.25;
+                    player.vy = pushY * 2.6 + player.vy * 0.25;
+                    screenShake = Math.max(screenShake, 4);
+                }
+            }
+            
+            // Coins
+            for (let c of coins) {
+                if (!c.collected && dist(player.x, player.y, c.x, c.y) < player.radius + c.radius + 3) {
+                    c.collected = true;
+                    score += 12;
+                }
+            }
+            
+            // Cars
+            for (let c of parkedCars) {
+                const d = dist(player.x, player.y, c.x, c.y);
+                if (d < 34) {
+                    const dx = player.x - c.x;
+                    const dy = player.y - c.y;
+                    const len = Math.hypot(dx, dy) || 1;
+                    player.x = c.x + (dx / len) * 36;
+                    player.y = c.y + (dy / len) * 36;
+                    player.vx = (dx / len) * 3.0;
+                    player.vy = (dy / len) * 3.0;
+                    screenShake = Math.max(screenShake, 5);
+                }
+            }
+            
+            // Rakes
+            const now = Date.now();
+            const spd = Math.hypot(player.vx, player.vy);
+            const flying = spd > 2.1;
+            
+            for (let r of rakes) {
+                const d = dist(player.x, player.y, r.x, r.y);
+                if (d < player.radius + r.radius + 2) {
+                    const dx = player.x - r.x;
+                    const dy = player.y - r.y;
+                    const len = Math.hypot(dx, dy) || 1;
+                    
+                    player.vx = (-player.vx * 1.65) + (dx / len) * 1.2;
+                    player.vy = (-player.vy * 1.65) + (dy / len) * 1.2;
+                    
+                    const overlap = (player.radius + r.radius - d) + 4;
+                    player.x += (dx / len) * overlap;
+                    player.y += (dy / len) * overlap;
+                    
+                    r.hitFlash = 6;
+                    screenShake = Math.max(screenShake, flying ? 9 : 5);
+                    
+                    if (flying || spd > 1.5) {
+                        consecutiveHits++;
+                        lastHitTime = now;
+                    } else {
+                        consecutiveHits = Math.max(consecutiveHits, 1);
+                    }
+                    
+                    if (consecutiveHits >= 4) {
+                        gameState = 'gameover';
+                        showGameOver();
+                        return;
+                    }
+                    break;
+                }
+            }
+            
+            if (!flying && now - lastHitTime > 650) consecutiveHits = 0;
+            if (screenShake > 0) screenShake *= 0.78;
+            
+            // Win check
+            if (player.x > exitZone.x && player.x < exitZone.x + exitZone.w &&
+                player.y > exitZone.y && player.y < exitZone.y + exitZone.h) {
+                if (consecutiveHits < 3) {
+                    gameState = 'win';
+                    showWin();
+                }
+            }
+            
+            score = coins.filter(c => c.collected).length * 12;
+        }
+        
+        function draw() {
+            ctx.save();
+            if (screenShake > 0.2) {
+                const s = (Math.random() - 0.5) * screenShake;
+                ctx.translate(s, s);
+            }
+            ctx.translate(-cameraX, -cameraY);
+            
+            ctx.fillStyle = '#3a3a3a';
+            ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+            
+            // Parking spaces
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 2.2;
+            for (let row = 0; row < 5; row++) {
+                const baseY = 92 + row * 165;
+                for (let col = 0; col < 9; col++) {
+                    ctx.strokeRect(90 + col * 78, baseY, 58, 85);
+                }
+            }
+            
+            // Lanes
+            ctx.fillStyle = 'rgba(55,55,65,0.55)';
+            for (let row = 0; row < 4; row++) {
+                ctx.fillRect(55, 172 + row * 165, WORLD_W - 110, 36);
+            }
+            
+            // Barriers
+            ctx.fillStyle = '#555';
+            for (let b of barriers) {
+                if (b.isGap) continue;
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+                if (b.h < 18 && b.w > 80) {
+                    ctx.fillStyle = '#c0392b';
+                    ctx.fillRect(b.x, b.y + 2, b.w, 4);
+                    ctx.fillStyle = '#555';
+                }
+            }
+            
+            // Exit
+            ctx.fillStyle = 'rgba(40,180,80,0.22)';
+            ctx.fillRect(exitZone.x, exitZone.y, exitZone.w, exitZone.h);
+            ctx.strokeStyle = '#44ff88';
+            ctx.lineWidth = 3.5;
+            ctx.strokeRect(exitZone.x, exitZone.y, exitZone.w, exitZone.h);
+            ctx.fillStyle = '#44ff88';
+            ctx.font = 'bold 10px "Press Start 2P", monospace';
+            ctx.fillText('EXIT', exitZone.x + 48, exitZone.y + 335);
+            
+            // Cars
+            for (let c of parkedCars) {
+                ctx.save();
+                ctx.translate(c.x, c.y);
+                ctx.rotate(c.angle);
+                ctx.fillStyle = 'rgba(0,0,0,0.32)';
+                ctx.fillRect(-27, -12, 54, 24);
+                ctx.fillStyle = c.color;
+                ctx.fillRect(-24, -9, 48, 18);
+                ctx.fillStyle = '#222';
+                ctx.fillRect(-13, -5, 26, 10);
+                ctx.fillStyle = '#88ccff';
+                ctx.fillRect(-10, -2, 7, 5);
+                ctx.fillRect(4, -2, 7, 5);
+                ctx.fillStyle = '#111';
+                ctx.beginPath();
+                ctx.arc(-13, 10, 4.5, 0, Math.PI*2);
+                ctx.arc(13, 10, 4.5, 0, Math.PI*2);
+                ctx.fill();
+                ctx.restore();
+            }
+            
+            // Rakes
+            for (let r of rakes) {
+                ctx.save();
+                ctx.translate(r.x, r.y);
+                ctx.rotate(r.angle);
+                if (r.hitFlash > 0) {
+                    ctx.shadowColor = '#ffcc00';
+                    ctx.shadowBlur = 6;
+                    r.hitFlash--;
+                }
+                ctx.fillStyle = '#8B5A2B';
+                ctx.fillRect(-3, -19, 6, 31);
+                ctx.fillStyle = '#aaa';
+                ctx.fillRect(-11, 10, 22, 5.5);
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 1.6;
+                for (let t = -8; t <= 8; t += 4) {
+                    ctx.beginPath();
+                    ctx.moveTo(t, 10);
+                    ctx.lineTo(t, 19);
+                    ctx.stroke();
+                }
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            }
+            
+            // Coins
+            for (let c of coins) {
+                if (c.collected) continue;
+                ctx.save();
+                ctx.translate(c.x, c.y);
+                ctx.fillStyle = '#ffcc00';
+                ctx.beginPath();
+                ctx.arc(0, 0, c.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fff59d';
+                ctx.beginPath();
+                ctx.arc(-1.2, -1.2, c.radius * 0.36, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+            
+            // Player
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            const spd = Math.hypot(player.vx, player.vy);
+            const ang = spd > 0.4 ? Math.atan2(player.vy, player.vx) : 0;
+            
+            ctx.fillStyle = 'rgba(0,0,0,0.28)';
+            ctx.beginPath();
+            ctx.ellipse(2, 3.5, 8.5, 4.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#2c5aa0';
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#ffcc99';
+            const hd = player.radius * 0.52;
+            const hx = Math.cos(ang) * hd;
+            const hy = Math.sin(ang) * hd;
+            ctx.beginPath();
+            ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#222';
+            const ex = hx + Math.cos(ang) * 1.5;
+            const ey = hy + Math.sin(ang) * 1.5;
+            ctx.beginPath();
+            ctx.arc(ex - 1.5, ey - 0.9, 1, 0, Math.PI * 2);
+            ctx.arc(ex + 1.5, ey - 0.9, 1, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            
+            ctx.restore();
+            
+            if (gameState === 'playing') {
+                ctx.fillStyle = 'rgba(0,0,0,0.58)';
+                ctx.fillRect(9, 7, 142, 40);
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(9, 7, 142, 40);
+                
+                ctx.fillStyle = '#ffcc00';
+                ctx.font = 'bold 8px "Press Start 2P", monospace';
+                ctx.fillText(`COINS: ${Math.floor(score / 12)}`, 14, 19);
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = '7px "Press Start 2P", monospace';
+                ctx.fillText(`HITS: ${consecutiveHits}/4`, 14, 30);
+                
+                if (consecutiveHits >= 3) {
+                    ctx.fillStyle = '#ff4444';
+                    ctx.fillText('DANGER', 95, 19);
+                }
+            }
+            
+            if (gameState === 'playing') {
+                ctx.save();
+                ctx.globalAlpha = 0.52;
+                ctx.fillStyle = '#222';
+                ctx.beginPath();
+                ctx.arc(joystick.baseX, joystick.baseY, joystick.baseRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(joystick.baseX, joystick.baseY, joystick.baseRadius, 0, Math.PI * 2);
+                ctx.stroke();
+                
+                ctx.globalAlpha = 0.88;
+                ctx.fillStyle = joystick.active ? '#ffcc00' : '#888';
+                ctx.beginPath();
+                ctx.arc(joystick.knobX, joystick.knobY, joystick.knobRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+        
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function startGame() {
+            document.getElementById('menu-overlay').classList.remove('show');
+            document.getElementById('gameover-overlay').classList.remove('show');
+            document.getElementById('win-overlay').classList.remove('show');
+            
+            player.x = 140;
+            player.y = WORLD_H / 2 + (Math.random()-0.5)*90;
+            player.vx = 0;
+            player.vy = 0;
+            
+            cameraX = 0;
+            cameraY = 0;
+            
+            createParkingLot();
+            
+            consecutiveHits = 0;
+            score = 0;
+            screenShake = 0;
+            lastHitTime = Date.now();
+            
+            joystick.active = false;
+            joystick.touchId = null;
+            joystick.knobX = joystick.baseX;
+            joystick.knobY = joystick.baseY;
+            touchDirX = 0;
+            touchDirY = 0;
+            
+            gameState = 'playing';
+            resizeGame();
+        }
+        
+        function restartGame() {
+            document.getElementById('gameover-overlay').classList.remove('show');
+            document.getElementById('win-overlay').classList.remove('show');
+            startGame();
+        }
+        
+        function showGameOver() {
+            const o = document.getElementById('gameover-overlay');
+            document.getElementById('final-stats').innerHTML = 
+                `Coins: <strong>${Math.floor(score / 12)}</strong>`;
+            o.classList.add('show');
+            gameState = 'gameover';
+            joystick.active = false;
+        }
+        
+        function showWin() {
+            const o = document.getElementById('win-overlay');
+            document.getElementById('win-stats').innerHTML = 
+                `You escaped the lot!<br>Coins: <strong>${Math.floor(score / 12)}</strong>`;
+            o.classList.add('show');
+            gameState = 'win';
+            joystick.active = false;
+        }
+        
+        function boot() {
+            createParkingLot();
+            
+            ctx.fillStyle = '#3a3a3a';
+            ctx.fillRect(0, 0, W, H);
+            
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 2;
+            for (let row = 0; row < 4; row++) {
+                const y = 88 + row * 115;
+                for (let col = 0; col < 5; col++) {
+                    ctx.strokeRect(75 + col * 68, y, 52, 72);
+                }
+            }
+            
+            for (let i = 0; i < 5; i++) {
+                const rx = 140 + i * 85;
+                const ry = 130 + (i % 3) * 85;
+                ctx.fillStyle = '#8B5A2B';
+                ctx.fillRect(rx-2, ry-15, 5, 26);
+            }
+            
+            for (let i = 0; i < 4; i++) {
+                ctx.fillStyle = '#ffcc00';
+                ctx.beginPath();
+                ctx.arc(190 + i * 80, 200 + (i % 2) * 75, 5.5, 0, Math.PI*2);
+                ctx.fill();
+            }
+            
+            ctx.fillStyle = 'rgba(40,180,80,0.25)';
+            ctx.fillRect(W - 95, 140, 80, 260);
+            ctx.strokeStyle = '#44ff88';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(W - 95, 140, 80, 260);
+            
+            player.x = 140;
+            player.y = H / 2;
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            ctx.fillStyle = '#2c5aa0';
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#ffcc99';
+            ctx.beginPath();
+            ctx.arc(5, 0, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = '#222';
+            ctx.beginPath();
+            ctx.arc(joystick.baseX, joystick.baseY, joystick.baseRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 0.82;
+            ctx.fillStyle = '#888';
+            ctx.beginPath();
+            ctx.arc(joystick.knobX, joystick.knobY, joystick.knobRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            
+            resizeGame();
+            gameLoop();
+            
+            setTimeout(() => {
+                const mo = document.getElementById('menu-overlay');
+                if (mo && gameState === 'menu') mo.classList.add('show');
+            }, 65);
+            
+            console.log('%c[RAKE LOT ESCAPE] Structured real parking lot maze loaded', 'color:#666');
+        }
+        
+        boot();
+    </script>
+</body>
+</html>
